@@ -1,0 +1,124 @@
+#!/bin/bash
+
+. /etc/default/SYSconstants
+##set -x
+verifyblk()
+{
+cat >>${ROLEDIRscripts}/mkusers << "__EOF__"
+STATUS="$?"
+if [ "X${STATUS}" != X0 -a "X${STATUS}" != "X9" ] ; then
+  exit "${STATUS}"
+fi
+__EOF__
+
+}
+
+test "X${*}" = "X" && exit 9
+tar="${*}"
+test -f "${tar}" || exit 11
+TARPERMS=`tar -tzvf ${tar}|awk '{print $2}'|sort -u`
+test "X${TARPERMS}" = "X" && exit 12
+CLEANTARPERMS=`echo "${TARPERMS}"|awk -F/ ' {if ($1 != "adm" && $1 != "avahi" && $1 != "bin" &&  $1 != "daemon" &&  $1 != "dbus" &&  $1 != "gdm" && $1 != "haldaemon" && $1  != "listen" &&  $1 != "lp" && $1 != "nfsnobody" && $1 != "noaccess" &&  $1 != "nobody" && $1 != "nobody4" && $1 != "nscd" && $1 != "ntp" &&$1 != "nuucp" && $1 != "operator" &&  $1 != "oprofile" && $1 != "pcap" && $1 != "postfix" && $1 != "postgres" && $1 != "root" && $1 != "rpc" && $1 != "rpcuser" &&  $1 != "smmsp" && $1 != "sshd" && $1 != "svctag" && $1 != "sys" && $1 != "unknown" && $1 != "uucp" && $1 != "vcsa" && $1 != "webservd" && $1 != "xfs" && $2 != "adm" && $2 != "audio" && $2 != "avahi" &&  $2 != "avdefs" && $2 != "bin" && $2 != "daemon" &&$2  != "dbus" && $2 != "dip" && $2 != "disk" && $2 != "floppy" && $2 != "ftp" && $2 != "games" && $2 != "gdm" && $2 != "gopher" && $2 != "haldaemon" && $2 != "kmem" && $2 != "lock" && $2 != "lp" && $2 != "man" && $2 != "mem" && $2 != "news" && $2 != "nfsnobody" && $2 != "noaccess" && $2 != "nobody" && $2 != "nogroup" && $2 != "nscd" && $2 != "ntp" && $2 != "nuucp" && $2 != "oprofile" && $2 != "other" && $2 != "pcap" && $2 != "postdrop" && $2 != "postfix" && $2 != "postgres" && $2 != "root" && $2 != "rpc" && $2 != "rpcuser" && $2 != "screen" && $2 != "slocate" && $2 != "smmsp" && $2 != "sshd" && $2 != "staff" && $2 != "sys" && $2 != "sysadmin" && $2 != "tty" && $2 != "unknown" && $2 != "users" && $2 != "utempter" && $2 != "utmp" && $2 != "uucp" && $2 != "vcsa" && $2 != "webservd" && $2 != "wheel" && $2 != "xfs" ) {print $1" "$2}} '`
+
+##test "X${CLEANTARPERMS}" = "X" && exit 12
+##set -x
+users=`echo "${CLEANTARPERMS}"|awk {'print $1'}|sort -u|grep -v "^[0-9]*$"`
+groups=`echo "${CLEANTARPERMS}"|awk {'print $2'}|sort -u|grep -v "^[0-9]*$"`
+taretcgroup=`tar zxOf ${tar} etc/group /etc/group `
+taretcpasswd=`tar zxOf ${tar} etc/passwd /etc/passwd `
+
+ 
+##exit 13
+
+NHOST=`echo "${ARGS}"|awk {'print $2'}`
+CWD=`pwd`
+DIRNAME=`dirname ${tar}`
+BASENAME=`basename ${tar}`
+FULLREV=`echo "${BASENAME}"|awk -F\- {'print $NF'}|sed -e "s/\.tar\.gz$//g"`
+SWNAME=`echo "${BASENAME}"|perl -p -e "s/\-${FULLREV}.*//g"|perl -p -e "s/[\.,\+].*//g"|perl -p -e "s/[0-9]\..*//g"|perl -p -e "s/\-\-/\-/g"|perl -p -e "s/\_\_/\_/g"|perl -p -e "s/\-[0-9]$//g"|perl -p -e "s/\_[0-9]$//g"`
+test "X${SWNAME}" = "X" && exit 20
+
+ROLEDIR="${DIRNAME}/roles/${SWNAME}"
+ROLEDIRfiles="${ROLEDIR}/files"
+ROLEDIRscripts="${ROLEDIR}/scripts"
+mkdir -p "${DIRNAME}/${SWNAME}-${FULLREV}"
+mkdir -p ${ROLEDIRfiles}
+mkdir -p ${ROLEDIRscripts}
+cd "${DIRNAME}/${SWNAME}-${FULLREV}" || exit 45
+xtdir=`pwd` ; test "X${xtdir}" = "X" && exit 46
+cd "${CWD}"
+ 
+
+##cd "${ROLEDIRscripts}" || exit 24
+##set -x
+svn export file:///odirtools/svn/svnroot/slack/roles/ci-template "${ROLEDIR}" --force
+##exit
+perl -p -i -e "s/%APP%/${SWNAME}/g" "${ROLEDIRscripts}/preinstall"
+
+echo "SYS${SWNAME}" > "${ROLEDIRscripts}/PKGS"
+
+grep '#!/bin/bash' "${ROLEDIRscripts}/mkusers" >/dev/null 2>&1 || echo '#!/bin/bash
+
+' >> "${ROLEDIRscripts}/mkusers"
+
+
+for gli in ${groups} ; do
+  groupinfo=`echo "${taretcgroup}"|grep "^${gli}:"`
+  test "X${groupinfo}" = "X" && continue
+  groupid=`echo "${groupinfo}"|awk -F: {'print $3'}` ; test "X${groupid}" = "X" &&  continue
+  if [ "X${groupid}" != "X" -a "X${gli}" != "X" ] ; then
+    echo "/usr/sbin/groupadd -g ${groupid} ${gli}" >> "${ROLEDIRscripts}/mkusers"
+    verifyblk
+  fi
+done
+
+for uli in ${users} ; do
+  userinfo=`echo "${taretcpasswd}"|grep "^${uli}:"`
+  test "X${userinfo}" = "X" && continue
+  uid=`echo "${userinfo}"|awk -F: {'print $3'}` ; test "X${uid}" = "X" &&  continue
+  gid=`echo "${userinfo}"|awk -F: {'print $4'}` ; test "X${gid}" = "X" &&  continue
+  homedir=`echo "${userinfo}"|awk -F: {'print $6'}` ; test "X${homedir}" = "X" && continue
+  shell=`echo "${userinfo}"|awk -F: {'print $7'}` ; test "X${shell}" = "X" && continue
+  echo "/usr/sbin/useradd -m -d ${homedir} -g ${gid} -u ${uid} -s ${shell} -k /etc/skel ${uli}" >> "${ROLEDIRscripts}/mkusers"
+  verifyblk
+  if [ "X${uli}" != "X" -a "X${uid}" != "X" -a "X${gid}" != "X" -a "X${homedir}" != "X" -a "X${shell}" != "X" -a "X${uli}" != "X" ] ; then
+    if [ "${__OSNAME}" = "SunOS" ] ; then
+      pwagingargs="-r files -x -1"
+      echo "/usr/bin/passwd ${pwagingargs} ${uli}" >> "${ROLEDIRscripts}/mkusers"
+      echo "/usr/bin/passwd -r files -N ${uli}" >> "${ROLEDIRscripts}/mkusers"
+    else
+      pwagingargs="-x 99999"
+      echo "/usr/bin/passwd ${pwagingargs} ${uli}" >> "${ROLEDIRscripts}/mkusers"
+    fi
+  fi
+done
+
+chmod 755 "${ROLEDIRscripts}/mkusers"
+
+${ROLEDIRscripts}/mkusers
+uaddst=$?
+if [ "X${uaddst}" != "X" -a "X${uaddst}" != "X0" ] ; then
+  echo
+  echo "error adding required user/group"
+  echo
+  cat "${ROLEDIRscripts}/mkusers"
+  echo
+  exit "${uaddst}"
+else
+  tar zxpvf ${tar} -C "${xtdir}"
+  mv "${xtdir}/etc/hostname" "${ROLEDIRscripts}"
+  rm -rf "${xtdir}/etc"
+  echo
+  echo "${ROLEDIRscripts}"
+  echo "${ROLEDIRfiles}"
+  echo "${xtdir}"
+  echo
+  echo "#################################################################"
+  echo "# now clean-up unwanted editable files in build(logs, code, ..)"
+  echo "# then run /sysbuild/pkgbuild/bin/broot2role ${xtdir}"
+  echo "#################################################################"
+  echo
+fi
+
+
+

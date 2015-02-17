@@ -1,0 +1,78 @@
+#!/bin/bash
+
+. /etc/default/SYSconstants
+if [ "X${__FILE}" = "X" ] ; then
+  /usr/sbin/slack-get global-solaris-adminfunctions
+  . /etc/default/SYSconstants
+  test "X${__FILE}" = "X" && exit 6
+fi
+##set -x
+
+test "X${__HOSTNAME}" = "X" -o "X${__HOSTSHORT}" = "X" -o "X${__DNSDOMAIN}" = "X" -o "X${__SITE}" = "X" -o "X${__SITESUPPORT}" = "X" -o "X${__SHORTSUPPORT}" = "X" -o "X${__MYCLASSBEES}" = "X" && exit 11
+
+CWD=`pwd`
+test "X${*}" = "X" && exit 9
+ARGS="${*}"
+APPDIR=`echo "${ARGS}"|awk {'print $1'}`
+test "X${APPDIR}" = "X." -o "X${APPDIR}" = "X./" && APPDIR=`pwd`
+##exit
+NHOST=`echo "${ARGS}"|awk {'print $2'}`
+DIRNAME=`dirname ${APPDIR}`
+test "X${DIRNAME}" = "X." -o "X${DIRNAME}" = "X./" && DIRNAME=`pwd`
+##exit
+BASENAME=`basename ${APPDIR}`
+DIRNAME=`echo "${DIRNAME}"|sed -e "s|^\./|${CWD}/|"`
+APPDIR=`echo "${APPDIR}"|sed -e "s|^\./|${CWD}/|"`
+##exit
+ls ${APPDIR} >/dev/null 2>&1 || exit 10
+FULLREV=`echo "${BASENAME}"|awk -F\- {'print $NF'}`
+SWNAME=`echo "${BASENAME}"|perl -p -e "s/\-${FULLREV}.*//g"|perl -p -e "s/[\.,\+].*//g"|perl -p -e "s/[0-9]\..*//g"|perl -p -e "s/\-\-/\-/g"|perl -p -e "s/\_\_/\_/g"|perl -p -e "s/\-[0-9]$//g"|perl -p -e "s/\_[0-9]$//g"`
+test "X${SWNAME}" = "X" && exit 20
+
+ROLEDIRfiles="${DIRNAME}/roles/${SWNAME}/files"
+ROLEDIRscripts="${DIRNAME}/roles/${SWNAME}/scripts"
+
+cd "${APPDIR}" || exit 24
+mkdir -p "${ROLEDIRscripts}"
+PKGFQDN=`cat "${ROLEDIRscripts}/hostname"` ; test "X${PKGFQDN}" = "X" && exit 34
+PKGSHORT=`echo "${PKGFQDN}"|awk -F\. {'print $1'}`
+
+TYPES=`find * .??* \! -type d -exec $__FILE -i {} \; 2>/dev/null`
+TEXT=`echo "$TYPES"|grep -E "(^.*: text\/|^.*: message\/|^.*: application\/x-shellscript|^.*: application\/x-perl|^.*: application\/x-awk)"|sed -e "s/:[^:]*$//g"`
+configs=`echo "${TEXT}"|while read line ; do
+  grep -H -E "(foo.foo.foo|foo\.foo|foo\.foo|${PKGFQDN}|${PKGSHORT}|\.foo\.|\.foo\.|\.foo\.|\.foo\.|\.foo\.)" $line  2>/dev/null
+done|$__GAWK -F: {'print $1'}|sort -u`
+if [ "X${configs}" != "X" ] ; then
+  mkdir -p "${ROLEDIRfiles}"
+  mkdir -p "${ROLEDIRscripts}"
+  perl -p -i.orig -e "s|${PKGFQDN}|%HOSTNAME%|g;s|${PKGSHORT}|%HOSTSHORT%|g;s|${__DNSDOMAIN}|%DNSDOMAIN%|g;s|\.${__SITE}\.|.%SITE%.|g;s|10\.240\.|%dr1CLASSB%.|g;s|10\.224\.|%ps1CLASSB%.|g" ${configs}
+  echo "${configs}"|cpio -pdmu "${ROLEDIRfiles}"
+  dirs=`cd "${ROLEDIRfiles}" ; find * .??* -depth -type d 2>/dev/null|${__GAWK} ' {if ($1 != "opt/" && $1 != "opt" && $1 != "opt" && $1 != "cust/" && $1 != "cust" && $1 != "cust" && $1 !~ "^bin/*/" && $1 !~ "^boot/*/" && $1 !~ "^dev/*/" && $1 !~ "^etc/*/" && $1 !~ "^home/*/" && $1 !~ "^lib/*/" && $1 !~ "^usr/local/lib/*/" && $1 !~ "^proc/*/" && $1 !~ "^root/*/" && $1 !~ "^sbin/*/" && $1 !~ "^usr/local/sbin/*/" && $1 !~ "^selinux/*/" && $1 !~ "^srv/*/" && $1 !~ "^sys/*/" && $1 !~ "^var/*/" && $1 !~ "^usr/local/var/*/" && $1 !~ "^tmp/*/" && $1 !~ "^usr/*/" && $1 !~ "^usr/local/*/") {print $1}}'`
+  ##echo "${dirs}" > /tmp/foo
+  ##dirs=`cd "${ROLEDIRfiles}" ; find * .??$ -type d 2>/dev/null`
+  ##cd "${CWD}"
+  ##cd "${APPDIR}" || exit 24
+  echo "${dirs}"|cpio -pdmu "${ROLEDIRfiles}"
+fi
+
+cd "${CWD}"
+echo "${ROLEDIRfiles}"
+echo
+echo "########################################################################"
+echo "# Config file were located via recursive grep of"
+echo "# (fqdn,dnsdomain,short hostname,ip addresses...)"
+echo "# Files that match were edited, replacing the"
+echo "# (fqdn,dnsdomain,short hostname,ip addresses...) with there"
+echo "# appropriate %MACRO% placeholder" 
+echo "# The originals can be reviewed by executing"
+echo "#   find ${APPDIR} -name *.orig"
+echo "# now run                                                  " 
+echo "#   /sysbuild/pkgbuild/bin/mkroleperms ${DIRNAME}/roles/${SWNAME}"
+echo "# then run                                                   "
+echo "#   /sysbuild/pkgbuild/bin/pkgbuild ${APPDIR}"
+echo "# and then test the whole role/pkg bundle by running"
+echo "#   chmod -R 755 ${DIRNAME}/roles/${SWNAME}/scripts"
+echo "#   slack --no-sync --cache ${DIRNAME} ${SWNAME}"
+echo "########################################################################"
+echo
+

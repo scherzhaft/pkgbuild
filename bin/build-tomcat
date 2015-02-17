@@ -1,0 +1,133 @@
+#!/bin/bash -x
+
+
+. /etc/default/SYSconstants
+tomcatbuilddeps='ant
+ant-*
+antlr
+axis
+bcel
+bsf
+classpathx-jaf
+classpathx-mail
+ecj
+jakarta-commons-collections
+jakarta-commons-daemon
+jakarta-commons-dbcp
+jakarta-commons-discovery
+jakarta-commons-httpclient
+jakarta-commons-logging
+jakarta-commons-net
+jakarta-commons-pool
+jakarta-oro
+java_cup
+jdepend
+jline
+jsch
+junit
+jzlib
+libgcj
+log4j
+mx4j
+regexp
+rhino
+sinjdoc
+tomcat6-el-2.1-api
+tomcat6-jsp-2.1-api
+tomcat6-lib
+tomcat6-servlet-2.5-api
+wsdl4j
+xalan-j2
+xerces-j2
+xml-commons-apis
+xml-commons-resolver'
+
+
+yum -y install ${tomcatbuilddeps}
+
+sleep 3
+
+yum -y upgrade ${tomcatbuilddeps}
+
+export JAVA_HOME=/usr/java/latest
+export ANT_HOME=/opt/apache-ant
+##export ANT_LIB_DIR=${ANT_HOME}/lib
+
+
+
+
+
+export PATH=${JAVA_HOME}/bin:${JAVA_HOME}:${ANT_HOME}/bin:${ANT_HOME}:${PATH}
+
+RELEASE=`wget http://svn.apache.org/repos/asf/tomcat/tc7.0.x/tags/ -O -|grep 'href="TOM'|awk -F\< {'print $3'}|awk -F\= {'print $2'}|awk -F\> {'print $1'}|sort -V|tail -1|perl -p -e "s|\"||g"|perl -p -e "s|\/||g"`
+
+VERSION=`echo "${RELEASE}"|perl -p -e "s|[A-Z,a-z,_]+|\.|g"|perl -p -e "s|^\.||g"`
+TOMCATBUILD="/var/tmp/TOMCATBUILD$$"
+rm -rf ${TOMCATBUILD}
+mkdir -p ${TOMCATBUILD}
+cd ${TOMCATBUILD}
+
+
+svn co http://svn.apache.org/repos/asf/tomcat/tc7.0.x/tags/${RELEASE} ./tomcat-${VERSION}
+
+cd ./tomcat-${VERSION}  &&  {
+
+  echo "base.path=`pwd`/dl
+trydownload.retries=3
+trydownload.httpusecaches=false"  > build.properties
+
+  mkdir -p dl
+  perl -p -i.prev -e "s|httpusecaches=\"\\$\\{trydownload\\.httpusecaches\}\"||g" build.xml
+  touch timestamp
+
+  sleep 2
+  echo "${JAVA_HOME}"
+  echo "${ANT_HOME}"
+  which java
+  which ant
+  ant  --execdebug  -v &&  {
+  ####read foo
+    mkdir -p output/SYSbuildroot/tomcat7-${VERSION}/opt &&  {
+      chown -R tomcat:tomcat output/build
+      mv  output/build  output/SYSbuildroot/tomcat7-${VERSION}/opt/tomcat7  &&  {
+      mkdir -p  output/SYSbuildroot/tomcat7-demo-${VERSION}/opt/tomcat7  && {
+        mv output/SYSbuildroot/tomcat7-${VERSION}/opt/tomcat7/webapps output/SYSbuildroot/tomcat7-demo-${VERSION}/opt/tomcat7
+        chown -R tomcat:tomcat output/SYSbuildroot/tomcat7-demo-${VERSION}/opt/tomcat7
+        chmod -R 755 output/SYSbuildroot/tomcat7-demo-${VERSION}/opt/tomcat7
+        mkdir -p output/SYSbuildroot/tomcat7-${VERSION}/opt/tomcat7/webapps && {
+          chown -R tomcat:tomcat output/SYSbuildroot/tomcat7-${VERSION}/opt/tomcat7/webapps
+          chmod -R 755 output/SYSbuildroot/tomcat7-${VERSION}/opt/tomcat7/webapps
+          }
+        }
+
+        cd output/SYSbuildroot/tomcat7-${VERSION} &&  {
+          BUILDTAR=`/unix_ops/pkgbuild/bin/pkgbuild \`pwd\` 2>&1|grep tar|grep chmod|awk {'print $NF'}`
+          ####/unix_ops/pkgbuild/bin/pkgbuild `pwd`
+          ####enableOPSLinuxrepo
+          ####yum clean all
+          ####yum -y install SYStomcat7
+          ####yum -y update  SYStomcat7
+          test "X${BUILDTAR}" != "X" && {
+            FORCEDREV=`echo "${BUILDTAR}"|perl -p -e "s|,REV=|-|g"|awk -F\/ {'print $NF'}|awk -F\- {'print $NF'}`
+            test "X${FORCEDREV}" != "X" && {
+              FORCEDREV=`echo "${FORCEDREV}"|awk -F\. {'print $1"."$2"."$3"."$4'}`
+              echo "Release:        ${FORCEDREV}" > "${TOMCATBUILD}/tomcat-${VERSION}/output/SYSbuildroot/tomcat7-demo-${VERSION}/release.spec"
+              }
+
+            cd "${TOMCATBUILD}/tomcat-${VERSION}/output/SYSbuildroot/tomcat7-demo-${VERSION}" && {
+              /unix_ops/pkgbuild/bin/pkgbuild `pwd`
+              ####/home/steckers/my.master.checkout/pkgbuild/bin/pkgbuild `pwd`
+              cd /var/tmp && rm -rf "${TOMCATBUILD}"
+              exit 0
+              }
+
+            exit 33
+            }
+
+          }
+        
+        }
+      }
+    }
+  }
+

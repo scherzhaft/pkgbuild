@@ -1,0 +1,23 @@
+pkgbuild  - USAGE(How to use pkgbuild to make software)
+	1.  Read the README
+	2.  cd /sysbuild/pkgbuild/srcarchive
+	3.  Place the original software in ./srcarchive, using a standard archive format(tar, tar.gz, zip, ...)
+		##HINT: links http://ftp.sunfreeware.com/ftp/pub/freeware/SOURCES
+	3.  Extract your software to the pkgbuild root(tar -zxvf %yoursoftware.tar.gz -C /sysbuild/pkgbuild)
+	4.  cd /sysbuild/pkgbuild (into the root of pkgbuild)
+	5.  Setup env(. ./SYSENV)
+	6.  Make SYS prefix(mkdir -p ./%yoursoftware%/SYSBUILD/$__OSNAME/$__ARCH/$__RELEASE/BUILDROOT
+	7.  Make SYS configure(mkdir -p ./%yoursoftware%/SYSBUILD/$__OSNAME/$__ARCH/$__RELEASE/CONFIGURE
+	8.  Fix owner/perm & add to svn(pwn ./%yoursoftware%)
+
+	9.  Commit the add(svn commit -m "initial import  - %yoursoftware%" ./%yoursoftware%
+
+	12.  Determine with SYS prefix you will use(/opt should be used for apps that you want on a seperate slice to protect / from getting filled i.e. apaches log directory is normally under the app dir, /usr/local should be used for apps that arn't going to fill up / i.e. most utilities, and only daemons whos content and logs will reside on a different slice)
+	13.  export DESTDIR=/sysbuild/pkgbuild/%yoursoftware%/SYSBUILD/$__OSNAME/$__ARCH/$__RELEASE/BUILDROOT
+	14.  cd /sysbuild/pkgbuild/%yoursoftware%/SYSBUILD/$__OSNAME/$__ARCH/$__RELEASE/CONFIGURE
+	15.  run make -v, ensuring the make in you path is GNU.
+	16.  RUN configure RELATIVE TO CONFIGURE DIRECTORY, using either /opt or /usr/local as your prefix '(../../../../../configure --prefix=/usr/local||../../../../../configure --prefix=/opt)' + whatever other options your build requires.  ##IF YOU ARN'T USING GNU make THIS TYPE OF MAKE WILL FAIL!!##
+	17.  RUN all your softwares 'make;make install DESTDIR="${DESTDIR}";...' cmds from the CONFIGURE directory as well.  This style of building is REQUIRED when you are doing multiple architecture builds, and keeps the source directory clean.
+
+- When your happy with the build, correct perms/owner and add to svn(cd /sysbuild/pkgbuild/%yoursoftware%;pwn .),  and then commit to svn(cd %yoursoftware%;svn commit -m "%yoursoftware% ${__OSNAME} ${__ARCH} build")
+

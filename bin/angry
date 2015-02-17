@@ -1,0 +1,47 @@
+#!/bin/bash
+
+. /etc/default/SYSconstants
+. /etc/default/slack-functions
+
+MYIFS="${IFS}"
+UNSPACE="$1"
+CWD=`pwd`
+test "X${UNSPACE}" = "X." -o "X${UNSPACE}" = "X./" && UNSPACE="${CWD}"
+UNSPACE=`echo "${UNSPACE}"|sed -e "s|^\./|${CWD}/|"`
+
+
+doit()
+{
+ls $1 || exit 1
+
+##ANGRY=`find $1 -name "* *"|perl -p -e "s/\n/,/g"|perl -p -e "s/\,$/\n/g"`
+ANGRY=`find $1 -name "* *"`
+test "X${ANGRY}" = "X" && exit 70
+echo "${ANGRY}" > /tmp/angry.out
+##exit
+
+##IFS=,
+echo "${ANGRY}"|while read pathli ; do
+  SRC=`echo "$pathli"|sed -e 's| |\ |g'`
+  DIR=`dirname "${SRC}"`
+  SRCBASE=`basename "${SRC}"`
+  DEST=`echo "${pathli}"|sed -e 's| |_|g'`
+  DESTNAME=`basename "${DEST}"`
+
+  echo "${SRC}"
+  echo "${DIR}"
+  echo "${SRCBASE}"
+  echo "${DEST}"
+  echo "${DESTNAME}"
+
+   cd "${DIR}" && tar czvf "${DESTNAME}.tar.gz" "${SRCBASE}" && rm -rf "${SRCBASE}"
+
+done
+}
+
+
+
+
+test "X${UNSPACE}" != "X" && doit "${UNSPACE}"
+##IFS="${MYIFS}"
+cd "${CWD}"

@@ -1,0 +1,106 @@
+#!/bin/bash
+
+. /sysbuild/pkgbuild/SYSENV
+set -x
+PKGBUILD="/sysbuild/pkgbuild"
+SRCARCHIVE="${PKGBUILD}/srcarchive"
+RAWWGET=`wget http://mirror.candidhosting.com/pub/apache/httpd -O - || exit $?`
+AVAILSRCS=`echo "${RAWWGET}"|grep ".tar.gz"|perl -p -e "s/\<a .*href=\".*\"\>//g"|perl -p -e "s/\<\/a\>.*//g"|awk {'print $NF'}|grep -v -i "windows"|grep ".tar.gz$"`
+##id|grep '(root)' && exit $?
+#
+if [ "X$@" != "X" ] ; then
+  cd "${SRCARCHIVE}"
+  wget http://mirror.candidhosting.com/pub/apache/httpd/$1 || exit $?
+  SRCDIR=`tar -ztvf $1 |awk {'print $NF'}|awk -F\/ {'print $1'}|sort -u|grep '.'|head -1`
+  test -d "${PKGBUILD}/${SRCDIR}" || tar -zxvf $1 -C "${PKGBUILD}" || exit $?
+  cd "${PKGBUILD}"
+  sudo chmod 2770 .;sudo chown svn:svn .
+  pwn "${SRCDIR}"
+  ##checkdahash
+  cd "${SRCDIR}"
+  mkdir -p SYSBUILD/$__OSNAME/$__ARCH/$__RELEASE/BUILDROOT
+  mkdir -p SYSBUILD/$__OSNAME/$__ARCH/$__RELEASE/CONFIGURE
+  mkdir -p /var/tmp/pkg$$
+  cd /var/tmp/pkg$$
+  sudo pkg-get -U
+  PKGREV=`pkg-get -a|grep "SYShttpd " |sort -u|tail -1|awk {'print $NF'}`
+  test -n "${PKGREV}" || exit $?
+  pkg-get -d "SYShttpd@${PKGREV}" || exit $?
+  CURRPKG=`ls`
+  test -n "${CURRPKG}" || exit $?
+  pkgtrans -i "${CURRPKG}" . all || exit $?
+  SVNINFO=`find . -name pkginfo -exec grep  "^SVNINFO=" {} \;|perl -p -e "s/^SVNINFO\=//g"`
+  test -n "${SVNINFO}" || exit $?
+  SVNBRANCH=`echo "${SVNINFO}"|perl -p -e "s/\@.*//g"`
+  svn checkout file:///odirtools/svn/svnroot/${SVNBRANCH}/SYSBUILD || exit $?
+  cd ./SYSBUILD || exit $?
+  find . -name DESC -depth -print|cpio -pdmu "${PKGBUILD}/${SRCDIR}/SYSBUILD"
+  find . -type f -name pkginfo|cut -d/ -f 1-6|grep "\/pkginfo$"|cpio -pdmu "${PKGBUILD}/${SRCDIR}/SYSBUILD"
+  CONFIGLOGS=`find . \( -name CONFIGURE -o -name CONFIGURE.* \) -exec find {} -name config.log \;|cut -d/ -f 1-7|grep "\/config.log$"`
+  cd "${PKGBUILD}"
+  pwn "${SRCDIR}"
+  sudo chown -R svn:svn /odirtools/svn
+  sudo chmod -R 2770 /odirtools/svn
+  svn commit -m "initial source code import, ${SRCDIR}" "${SRCDIR}" || exit $?
+
+  for i in `echo "${CONFIGLOGS}"` ; do
+    cd /var/tmp/pkg$$
+    svn checkout file:///odirtools/svn/svnroot/pkgbuild/${SRCDIR} || exit $?
+    chmod -R 755 ./${SRCDIR}
+##    /bin/bash -i
+    cd /var/tmp/pkg$$/SYSBUILD
+    CONFIGDIR=`echo "${i}"|awk -F\/ {'print $5'}`
+    BUILDROOT=`echo "${CONFIGDIR}"|perl -p -e "s/CONFIGURE/BUILDROOT/g"`
+    CONFIGLINE=`head ${i}|grep "\$ .*/configure " | head -1|perl -p -e "s/^.*\/configure/configure/g"`
+    unset DESTDIR
+    export DESTDIR="${PKGBUILD}/${SRCDIR}/SYSBUILD/$__OSNAME/$__ARCH/$__RELEASE/${BUILDROOT}"
+    NEWCONFDIR="${PKGBUILD}/${SRCDIR}/SYSBUILD/$__OSNAME/$__ARCH/$__RELEASE/${CONFIGDIR}"
+    mkdir -p "${DESTDIR}"
+    mkdir -p "${NEWCONFDIR}"
+    svn add "${DESTDIR}" || exit $?
+    svn add "${NEWCONFDIR}" || exit $?
+    cd /var/tmp/pkg$$/${SRCDIR}
+    pwd
+    echo "${CONFIGLINE}"
+    ./${CONFIGLINE} && make && make install DESTDIR="${DESTDIR}" || exit $?
+    make clean
+    for file in * ; do
+      pwn $file
+    done
+    svn st|awk {'print $2'}|sudo cpio -pdmu ${NEWCONFDIR}
+##    /bin/bash -i
+    cd "${DESTDIR}" || exit $?
+    LOGSDIR=`find . -type d -name logs`
+    test -n "${LOGSDIR}" || exit $?
+    APACHEPFIX=`dirname "${LOGSDIR}"`
+    APACHEBASE=`basename "${APACHEPFIX}"`
+    test -n "${APACHEBASE}" || exit $?
+    mkdir -p ./var/${APACHEBASE}/logs
+    rm -rf "${LOGSDIR}" && ln -s ../../../var/${APACHEBASE}/logs ${LOGSDIR} || exit $?
+    for file in * ; do
+      pwn $file
+    done
+    cd ..
+    pwn "${DESTDIR}"
+    cd "${NEWCONFDIR}"
+    for file in * ; do
+      pwn $file
+    done
+    cd ..
+    pwn "${NEWCONFDIR}"
+    cd /var/tmp/pkg$$ 
+    rm -rf /var/tmp/pkg$$/${SRCDIR}
+##    /bin/bash -i
+  done
+  cd "${PKGBUILD}"
+  pwn ${SRCDIR}
+  sudo chown -R svn:svn /odirtools/svn
+  sudo chmod -R 2770 /odirtools/svn
+  svn commit -m "compiled/pkg'd ${SRCDIR} for $__ARCH" ${SRCDIR} || exit $?
+else
+  echo "##AVAILABLE SOURCES"
+  echo
+  echo "${AVAILSRCS}"
+fi
+
+

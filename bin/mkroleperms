@@ -1,0 +1,31 @@
+#!/bin/bash
+
+. /etc/default/SYSconstants
+
+CWD=`pwd`
+test "X$*" = "X" && exit 4
+ROLEDIR=`echo "$*"|awk {'print $1'}|sed -e "s|^\./|${CWD}/|"`
+test "X${ROLEDIR}" = "X." -o "X${ROLEDIR}" = "X./" && ROLEDIR="${CWD}"
+ROLEDIRfiles="${ROLEDIR}/files"
+ROLEDIRscripts="${ROLEDIR}/scripts"
+test -d "${ROLEDIRfiles}" || exit 8
+test -d "${ROLEDIRscripts}" || exit 9
+
+cd "${ROLEDIRfiles}" || exit 10
+find * -nogroup -exec chgrp root {} \;
+find * -nouser -exec chown root {} \;
+getstat=`find * .??* -depth 2>/dev/null|${__GAWK} ' {if ($1 != "opt/" && $1 != "opt" && $1 != "opt" && $1 != "cust/" && $1 != "cust" && $1 != "cust" && $1 !~ "^bin/*/" && $1 !~ "^boot/*/" && $1 !~ "^dev/*/" && $1 !~ "^etc/*/" && $1 !~ "^home/*/" && $1 !~ "^lib/*/" && $1 !~ "^usr/local/lib/*/" && $1 !~ "^proc/*/" && $1 !~ "^root/*/" && $1 !~ "^sbin/*/" && $1 !~ "^usr/local/sbin/*/" && $1 !~ "^selinux/*/" && $1 !~ "^srv/*/" && $1 !~ "^sys/*/" && $1 !~ "^var/*/" && $1 !~ "^usr/local/var/*/" && $1 !~ "^tmp/*/" && $1 !~ "^usr/*/" && $1 !~ "^usr/local/*/") {print $1}}'|xargs stat --printf="%a %U:%G %n\n" `
+
+CO=`echo "${getstat}"|awk {'print "chown "$2" "$3'}`
+CM=`echo "${getstat}"|awk {'print "chmod "$1" "$3'}`
+
+if [ "X${CO}${CM}" != "X" ] ; then
+echo '#!/bin/bash
+
+' > "${ROLEDIRscripts}/roleperms"
+fi
+
+test "X${CO}" != "X" && echo "${CO}" >> "${ROLEDIRscripts}/roleperms"
+test "X${CM}" != "X" && echo "${CM}" >> "${ROLEDIRscripts}/roleperms"
+
+chmod 755 "${ROLEDIRscripts}/roleperms" 2>/dev/null

@@ -1,0 +1,21 @@
+#!/bin/bash
+
+. /export/home/steckers/bin/SYSconstants
+
+case "${__OSNAME}${__RELEASE}" in
+  SunOS5.10)
+    export CPPFLAGS='-L/usr/local/lib -L/usr/sfw/lib -I/usr/sfw/include'
+    export CFLAGS="-mcpu=v9 -DOPENSSL_DISABLE_OLD_DES_SUPPORT ${CPPFLAGS}"
+    export LDFLAGS='-L/usr/local/lib -L/usr/sfw/lib'
+    export PATH=/sysbuild/pkgbuild/bin:/usr/ccs/bin:/usr/local/bin:/usr/local/sbin:/usr/sfw/bin:/usr/sfw/sbin:/usr/bin:/usr/sbin:/bin:/sbin:/opt/sfw/bin:/opt/sfw/sbin:/opt/csw/bin:/usr/local/apache2/bin:/usr/perl5/5.8.4/bin:/usr/openwin/bin
+  ;;
+  Linux*)
+    echo Linux foo
+  ;;
+  *)
+    echo foo
+esac      
+
+
+
+

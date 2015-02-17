@@ -1,0 +1,601 @@
+#!/bin/bash
+
+rpmish()
+{
+
+
+touch "${SYSPREFIX}/rpmish.cksum"
+
+if [ "X${EDITABLE}" != "X" ]
+then
+##HOWMANY=`echo "${EDITABLE}"|wc -l|awk {'print $1'}`
+##if [ "${HOWMANY}" -gt 2999 ] ; then
+##  echo "${EDITABLE}" > "${BUILD}/%config"
+##  echo "too many editable files..."
+##  echo "cleanup %config to something less than 3000 files and try again"
+##  exit 14
+##fi
+CLEANPINFO=`echo "${CLEANPINFO}"|sed -e "s/^CLASSES=.*/CLASSES=none rpmish/"`
+cd ${SYSPREFIX} && RPMISHCK=`cksum ${EDITABLE}`
+TOOMANY="$?"
+if [ "X${TOOMANY}" != "X0" ] ; then
+  echo "${EDITABLE}" > "${BUILD}/%config"
+  echo "too many editable files..."
+  echo "cleanup %config to something less than 3000 files and try again"
+  exit 14
+fi
+echo "${RPMISHCK}" > "${SYSPREFIX}/rpmish.cksum" 
+fi
+
+
+cat >"${SYSPREFIX}/i.rpmish" <<"__EOF__"
+#!/bin/sh
+
+TAG=pkgnew
+CWD=`pwd`
+PKGPSPOOL="${PKGSAV}/pspool/${PKG}"
+cd "${PKGPSPOOL}/reloc" || exit 0
+EFILES=`find * \! -type d`
+HOSTNAME=`/usr/bin/hostname`
+test "X${HOSTNAME}" != "X" && HOSTIP=`/usr/bin/getent hosts "${HOSTNAME}"|awk {'print $1'}|head -1`
+HOSTSHORT=`/usr/bin/hostname|/usr/bin/cut -f1 -d.`
+test "X${HOSTIP}" != "X" && perl -p -i -e "s|%HOSTIP%|${HOSTIP}|g" ${EFILES}
+test "X${HOSTNAME}" != "X" && perl -p -i -e "s|%HOSTNAME%|${HOSTNAME}|g" ${EFILES}
+test "X${HOSTSHORT}" != "X" && perl -p -i -e "s|%HOSTSHORT%|${HOSTSHORT}|g" ${EFILES}
+perl -p -i -e "s|%BASEDIR%|${BASEDIR}|g" ${EFILES}
+CKSUMS=`cksum ${EFILES} 2>/dev/null`
+echo "${CKSUMS}" > ${PKGPSPOOL}/install/rpmish.cksum
+
+
+while read src dest
+do
+        src=`echo "${src}"|sed -e "s|^${INST_DATADIR}/${PKG}|${PKGPSPOOL}|g"`
+        src=`eval echo ${src}`
+        if ls $dest >/dev/null 2>&1 ; then
+                cmp -s $src $dest
+                if [ $? != 0 ] ; then
+                        cp $src $dest.${TAG}
+                        echo "warning: ${dest} created as ${dest}.${TAG}"
+                fi
+        else
+                cp $src $dest
+        fi
+##echo "X${ppaths}" >> /tmp/NEWRPMISH
+done
+
+cd "${CWD}"
+/usr/bin/rm -rf "${PKGPSPOOL}/reloc"
+
+exit 0
+__EOF__
+
+cat >"${SYSPREFIX}/r.rpmish" <<"__EOF__"
+#!/bin/sh
+
+
+
+TAG=pkgnew
+test "X${BASEDIR}" = "X" -o "X${PKG}" = "X" && exit 0
+STDIN=`cat - |sed -e "s|^${BASEDIR}||g"|sed -e "s|^/||g"` ; test "X${STDIN}" = "X" && exit 0
+TAGRM=`echo "${STDIN}"|sed -e "s/$/\.${TAG}/g"`
+cd "${BASEDIR}" && /usr/bin/rm -f ${TAGRM}
+PKGFILECK=`cat ${PKGSAV}/pspool/${PKG}/install/rpmish.cksum` || exit 0
+test "X${PKGFILECK}" = "X" && exit 0
+##set -x
+PKGFLIST=`echo "${PKGFILECK}"|awk {'print $3'}`
+CWD=`pwd`
+cd "${BASEDIR}"
+CURFILECK=`cksum ${PKGFLIST} 2>/dev/null`
+COMPARE=`echo "${CURFILECK}"|diff - ${PKGSAV}/pspool/${PKG}/install/rpmish.cksum`
+
+KEEP=`echo "${COMPARE}"|grep "^< "|awk {'print $NF'}`
+if [ "X${KEEP}" != "X" ] ; then
+  CHANGEFILES=`echo "${KEEP}"|sed -e "s|^|${BASEDIR}/|g"|sed -e "s|//|/|g"`
+  echo "Ignoring changed files:"
+  echo ${CHANGEFILES}
+  KEEPREGX=`echo \^${KEEP}\$|sed -e "s/ /\$\|\^/g"`
+  REMOVE=`echo "${STDIN}"|/usr/xpg4/bin/grep -v -E "(${KEEPREGX}|^/$)"`
+else
+  REMOVE="${STDIN}"
+fi
+
+if [ "X${REMOVE}" != "X" -a "X${BASEDIR}" != "X" ] ; then
+  cd "${BASEDIR}" && /usr/bin/rm -f ${REMOVE}
+fi
+
+exit 0
+__EOF__
+
+}
+
+findunowned()
+{
+####exit
+find * -nogroup -exec chgrp root {} \;
+find * -nouser -exec chown root {} \;
+}
+
+main()
+{
+. /etc/default/SYSconstants
+set -x
+##__ARCH='i386'
+OSIMAGE='/unix_ops/SYScontrib'
+MYSWROOT="${OSIMAGE}/${__OSNAME}"
+MYSWBROOT="${MYSWROOT}/BUILDROOT"
+MYSWSPECS="${MYSWROOT}/SPECS"
+PKGGETREPO="/unix_ops/osImage/SunOS/pkgs/${__ARCH}/${__RELEASE}"
+
+STAGE="stage$$"
+PKGDEST="/var/tmp/pkgbuild$$"
+PKGSTAGE="${PKGDEST}/${STAGE}"
+PKGBUILDROOT="${PKGSTAGE}"
+
+TYPE="$2"
+if [ "X${TYPE}" = "X" ] ; then
+  echo "${1}"|grep "^/"
+  STATUS="$?"
+  if [ "X${STATUS}" = "X0" ] ; then
+    TYPE=dir
+  fi
+fi
+
+test "X${1}" != "X" -o "X${TYPE}" != "X" || exit 16
+
+case "${TYPE}" in
+  svn)
+    PKG="$1"
+    BUILD="${PKGBUILDROOT}/SYSBUILD/${__OSNAME}/${__ARCH}/${__RELEASE}"
+    svnstage
+##    /bin/bash -i
+  ;;
+  dir)
+
+    PKG=`basename ${1}`
+    BUILD="${1}"
+    dirstage
+##    /bin/bash -i
+  ;;
+  *)
+    echo "unknown TYPE: ${TYPE}" ; exit 28
+esac
+
+
+##mkdir -p "${PKGSTAGE}"
+##cd "${PKGSTAGE}" && svn checkout file:///odirtools/svn/svnroot2/pkgbuild/${PKG}/SYSBUILD/ && chmod -R 755 * .??*
+##cd "${BUILD}" && SHOULDIRUN=`find . \( -name BUILDROOT.*  -o -name BUILDROOT  \) -exec find {} \;|grep -v '/.svn'|awk -F\/ ' {if ($3 != "" ) {print $2"/"$3}}'|sort -u`
+
+if [ "X${SHOULDIRUN}" !=  "X" ] ; then
+ BUILDROOTS=`echo "${SHOULDIRUN}"|awk -F\/ {'print $1'}|sort -u`
+ test "X${TYPE}" = "Xdir" && BUILDROOTS="${BUILD}"
+ for BUILDli in `echo "${BUILDROOTS}"` ; do
+  SYSPREFIX="${PKGBUILDROOT}/SYSBUILD/${__OSNAME}/${__ARCH}/${__RELEASE}/${BUILDli}"
+  test "X${TYPE}" = "Xdir" && SYSPREFIX="${PKGBUILDROOT}"
+  getpkginfo
+  if [ "X${__OSNAME}" = "XSunOS" ] ; then
+    . /etc/default/SYSconstants
+    mkpkginfo
+    mkdepend
+    mkpkgproto
+    mkpackg
+  else
+    . /etc/default/SYSconstants
+    mkrpmdeps
+    mkspec
+    mkrpm
+  fi
+ done
+pkgcleanup
+
+else
+ echo
+ echo "Cowardly refusing to make a empty pkg......"
+ echo
+fi
+
+
+}
+
+svnstage()
+{
+rm -rf "${PKGSTAGE}"
+mkdir -p "${PKGSTAGE}"
+cd "${PKGSTAGE}" && svn checkout file:///odirtools/svn/svnroot2/pkgbuild/${PKG}/SYSBUILD/ && chmod -R 755 * .??*
+cd "${BUILD}" && SHOULDIRUN=`find . \( -name BUILDROOT.*  -o -name BUILDROOT  \) -exec find {} \;|grep -v '/.svn'|${__GREP} -v -E "(./%config|./rpmish.cksum|./i.rpmish$|./r.rpmish$|./pkginfo$|./depend$|./checkinstall$|./request$|./preinstall$|./postinstall$|./preuninstall$|./postremove$|./copyright$)"|awk -F\/ ' {if ($3 != "" ) {print $2"/"$3}}'|sort -u`
+cd "${BUILD}"
+/unix_ops/pkgbuild/bin/angry `pwd`
+findunowned
+}
+
+dirstage()
+{
+rm -rf "${PKGSTAGE}"
+mkdir -p "${PKGSTAGE}"
+cd "${BUILD}" && PKGCONTENT=`find . -depth -print|grep -v '/.svn'`
+test "X${PKGCONTENT}" = "X" -o "X${PKGCONTENT}" = "X." &&  { echo "${BUILD} is empty" ; exit 76 ; }
+echo "${PKGCONTENT}"|cpio -pdmu "${PKGSTAGE}"
+cd "${PKGSTAGE}" && SHOULDIRUN=`find . -depth -print|grep -v "^.$"|grep -v '/.svn'|${__GREP} -v -E "(./%config|./rpmish.cksum|./i.rpmish$|./r.rpmish$|./pkginfo$|./depend$|./checkinstall$|./request$|./preinstall$|./postinstall$|./preuninstall$|./postremove$|./copyright$)"`
+cd "${PKGSTAGE}"
+/unix_ops/pkgbuild/bin/angry `pwd`
+findunowned
+####exit
+}
+
+mkpkgproto()
+{
+if [ "X${SYSPREFIX}" != "X" -a -d "${SYSPREFIX}" ] ; then
+  cd "${SYSPREFIX}"
+########  if [ "X${TYPE}" = "Xsvn" ] ; then
+########    chown -R root:bin * .??*
+########    chmod -R 755 * .??*
+########  fi
+
+####  /unix_ops/pkgbuild/bin/angry `pwd`
+####  findunowned
+  test -f /opt/sfw/bin/gfile || exit 5
+  EDITABLE=`cat %config 2>/dev/null`
+  FTYPE=`find * \! -type d -exec /opt/sfw/bin/gfile -i {} \;` || exit 92
+  if [ "X${EDITABLE}" = "X" ] ; then
+    EDITABLE=`echo "${FTYPE}"|${__GREP} -E "(^.*: text\/|^.*: message\/|^.*: application\/x-shellscript|^.*: application\/x-perl|^.*: application\/x-awk)"|sed -e "s/:[^:]*$//g"|grep -v -E "(^%config|^rpmish.cksum|^i.rpmish$|^r.rpmish$|^pkginfo$|^depend$|^checkinstall$|^request$|^preinstall$|^postinstall$|^preuninstall$|^postremove$|^copyright$|^prototype$|/.svn|^\.svn)"`
+  echo "${EDITABLE}" >/tmp/editable
+  fi
+  CLEANPINFO=`cat ./pkginfo`
+  rpmish
+  SPECPROTO=`ls %config rpmish.cksum i.rpmish r.rpmish pkginfo depend checkinstall request preinstall postinstall preuninstall postremove copyright 2>/dev/null|awk {'print "i "$1'}`
+  DIRLIST=`find * -type d|pkgproto`
+
+  NONEDT=`echo "${FTYPE}"|${__GREP} -v -E "(^.*: text\/|^.*: message\/|^.*: application\/x-shellscript|^.*: application\/x-perl|^.*: application\/x-awk)"|sed -e "s/:[^:]*$//g"|grep -v -E "(^%config|^rpmish.cksum|^i.rpmish$|^r.rpmish$|^pkginfo$|^depend$|^checkinstall$|^request$|^preinstall$|^postinstall$|^preuninstall$|^postremove$|^copyright$|^prototype$|/.svn|^\.svn)"`
+  echo "${NONEDT}" > /tmp/nonedit
+####  exit 98
+
+  cd "${SYSPREFIX}" 
+
+####  exit 98
+##  test "X${NONEDT}" != "X" && NONEDTPROTO=`echo "${NONEDT}"|pkgproto`
+##  echo "${NONEDTPROTO}" > /tmp/noneproto
+##  exit 98
+
+
+
+  if [ "X${TYPE}" = "Xsvn" ] ; then
+    test "X${NONEDT}" != "X" && NONEDTPROTO=`echo "${NONEDT}"|pkgproto|awk {'print $1" "$2" "$3" 0755 root bin"'}`
+    echo "${NONEDTPROTO}" > /tmp/noneproto
+    test "X${EDITABLE}" != "X" && EDITABLEPROTO=`echo "${EDITABLE}"|pkgproto|awk {'print "e rpmish "$3" 0755 root bin"'}`
+  echo "${EDITABLEPROTO}" > /tmp/eproto
+    SAFEDIRS=`echo "${DIRLIST}"|${__GAWK} ' {if ($3 != "opt/" && $3 != "opt" && $3 != "cust/" && $3 != "cust" && $3 !~ "^bin/*/" && $3 !~ "^boot/*/" && $3 !~ "^dev/*/" && $3 !~ "^etc/*/" && $3 !~ "^home/*/" && $3 !~ "^lib/*/" && $3 !~ "^proc/*/" && $3 !~ "^root/*/" && $3 !~ "^sbin/*/" && $3 !~ "^selinux/*/" && $3 !~ "^srv/*/" && $3 !~ "^sys/*/" && $3 !~ "^var/*/" && $3 !~ "^tmp/*/" && $3 !~ "^usr/*/" ) {print $1" "$2" "$3" 0755 root bin"}
+else {print $1" "$2" "$3" ? ? ?"}}'`
+
+    SAFEDIRS=`echo "${SAFEDIRS}"|${__GAWK} ' {if ($3 != "opt/" && $3 != "opt" && $3 != "cust/" && $3 != "cust" && $3 !~ "^usr/local/bin/*/" && $3 !~ "^boot/*/" && $3 !~ "^dev/*/" && $3 !~ "^usr/local/etc/*/" && $3 !~ "^home/*/" && $3 !~ "^usr/local/lib/*/" && $3 !~ "^proc/*/" && $3 !~ "^root/*/" && $3 !~ "^usr/local/sbin/*/" && $3 !~ "^selinux/*/" && $3 !~ "^srv/*/" && $3 !~ "^sys/*/" && $3 !~ "^usr/local/var/*/" && $3 !~ "^tmp/*/" && $3 !~ "^usr/*/" && $3 !~ "^usr/local/*/"  ) {print $1" "$2" "$3" 0755 root bin"}
+else {print $1" "$2" "$3" ? ? ?"}}'`
+  
+  else
+    test "X${NONEDT}" != "X" && NONEDTPROTO=`echo "${NONEDT}"|pkgproto`
+    echo "${NONEDTPROTO}" > /tmp/noneproto
+    test "X${EDITABLE}" != "X" && EDITABLEPROTO=`echo "${EDITABLE}"|pkgproto|awk {'print "e rpmish "$3" "$4" "$5" "$6'}`
+  echo "${EDITABLEPROTO}" > /tmp/eproto
+    SAFEDIRS=`echo "${DIRLIST}"|${__GAWK} ' {if ($3 != "opt/" && $3 != "opt" && $3 != "cust/" && $3 != "cust" && $3 !~ "^bin/*/" && $3 !~ "^boot/*/" && $3 !~ "^dev/*/" && $3 !~ "^etc/*/" && $3 !~ "^home/*/" && $3 !~ "^lib/*/" && $3 !~ "^proc/*/" && $3 !~ "^root/*/" && $3 !~ "^sbin/*/" && $3 !~ "^selinux/*/" && $3 !~ "^srv/*/" && $3 !~ "^sys/*/" && $3 !~ "^var/*/" && $3 !~ "^tmp/*/" && $3 !~ "^usr/*/" ) {print $1" "$2" "$3" "$4" "$5" "$6}
+else {print $1" "$2" "$3" ? ? ?"}}'`
+
+    SAFEDIRS=`echo "${SAFEDIRS}"|${__GAWK} ' {if ($3 != "opt/" && $3 != "opt" && $3 != "cust/" && $3 != "cust" && $3 !~ "^usr/local/bin/*/" && $3 !~ "^boot/*/" && $3 !~ "^dev/*/" && $3 !~ "^usr/local/etc/*/" && $3 !~ "^home/*/" && $3 !~ "^usr/local/lib/*/" && $3 !~ "^proc/*/" && $3 !~ "^root/*/" && $3 !~ "^usr/local/sbin/*/" && $3 !~ "^selinux/*/" && $3 !~ "^srv/*/" && $3 !~ "^sys/*/" && $3 !~ "^usr/local/var/*/" && $3 !~ "^tmp/*/" && $3 !~ "^usr/*/" && $3 !~ "^usr/local/*/"  ) {print $1" "$2" "$3" "$4" "$5" "$6}
+else {print $1" "$2" "$3" ? ? ?"}}'`
+  fi
+  echo "${SAFEDIRS}" > /tmp/safedirs
+####  exit 98
+
+####echo "${SPECPROTO}"|grep "^i request" >/dev/null && EDITABLEPROTO=`echo "${EDITABLEPROTO}"|${__GAWK} {'print "e "$2" "$3" "$4" "$5" "$6'}`
+
+CLEANPROTO="${EDITABLEPROTO}
+${NONEDTPROTO}
+${SAFEDIRS}
+${SPECPROTO}"
+CLEANPROTO=`echo "${CLEANPROTO}"|sort -u|grep -v "/.svn"|grep '.'`
+
+echo "${CLEANPROTO}"|sort -u|grep '.' > /tmp/prototype
+
+####exit 98
+
+
+
+echo "${CLEANPINFO}" > "${SYSPREFIX}/pkginfo"
+echo "${CLEANPROTO}" > "${SYSPREFIX}/prototype"
+
+ ##vi ${SYSPREFIX}/prototype
+ chmod 755 "${SYSPREFIX}/prototype"
+fi
+##exit 98
+
+}
+
+mkpkginfo()
+{
+
+test "X${SYSPKGNAME}" = "X" -o "X${SHORTNAME}" = "X" -o "X${ARCH}" = "X" -o "X${CATEGORY}" = "X" -o "X${SYSVERSION}" = "X" -o "X${BASEDIR}" = "X" -o "X${HOTLINE}" = "X" -o "X${EMAIL}" = "X" -o "X${SUNW_PKG_THISZONE}" = "X" -o "X${SVNINFO}" = "X" && exit 250
+
+##printf "%b" "PKG=${SYSPKGNAME}\nNAME=${SHORTNAME}\nARCH=${ARCH}\nCATEGORY=${CATEGORY}\nVERSION=${SYSVERSION}\nBASEDIR=${BASEDIR}\nHOTLINE=${HOTLINE}\nEMAIL=${EMAIL}\nSUNW_PKG_THISZONE=${SUNW_PKG_THISZONE}\nSVNINFO=${SVNINFO}\nURL=http://${__SHORTSUPPORT}/SYScontrib/${__OSNAME}/BUILD/${SYSPKGNAME}-${SYSVERSION}.${ARCH}.tar.gz\n" > "${SYSPREFIX}/pkginfo"
+
+printf "%b" "PKG=${SYSPKGNAME}\nNAME=${SHORTNAME}\nARCH=${ARCH}\nCATEGORY=${CATEGORY}\nVERSION=${SYSVERSION}\nBASEDIR=${BASEDIR}\nHOTLINE=${HOTLINE}\nEMAIL=${EMAIL}\nSUNW_PKG_THISZONE=${SUNW_PKG_THISZONE}\n" > "${SYSPREFIX}/pkginfo"
+
+if [ "X${TYPE}" = "Xsvn" ] ; then
+  echo "SVNINFO=${SVNINFO}" >> "${SYSPREFIX}/pkginfo"
+else
+  echo "URL=http://${__SHORTSUPPORT}/SYScontrib/${__OSNAME}/BUILD/${SYSPKGNAME}-${SYSVERSION}.${ARCH}.tar.gz" >> "${SYSPREFIX}/pkginfo"
+fi
+
+
+
+if [ "X${DESC}" != "X" ] ; then
+ echo "DESC=\"${DESC}\"" >> "${SYSPREFIX}/pkginfo"
+fi
+chmod 755 "${SYSPREFIX}/pkginfo"
+}
+
+mkdepend()
+{
+
+
+if [ -f "${SYSPREFIX}/depend" ] ; then
+ return 0
+fi
+
+cd ${SYSPREFIX}
+foo=`find . -type f -exec file {} \;|grep -E 'ELF .*dynamic lib|ELF .*executable'|grep -v '/.svn'|awk -F\: {'print $1'}`
+foo4=`find $foo -exec ldd {} \;|awk {'print $3'}|sort -u|grep -v '/.svn'|grep -v "${PKGSTAGE}"| grep '.'`
+
+for i in `echo "${foo4}"` ; do
+ dep=`pkgchk -l -p $i|grep -A1 '^Referenced by the following packages:'|grep -v '^Referenced by the following packages:'|sort -u|grep '.'`
+
+ deplist=`printf "%b" "${deplist}\n${dep}\n"|sort -u|grep '.'`
+done
+
+echo "$deplist"|perl -p -e 's/SMCgcc//g'|perl -p -e 's/ /\n/g'|sort -u|grep '.'|awk {'print "P "$1'}|grep -v "^P ${SYSPKGNAME}$"|grep -v "^P SYS${ORIGSHORTNAME}$" >"${SYSPREFIX}/depend"
+chmod 755 "${SYSPREFIX}/depend"
+}
+
+mkpackg()
+{
+cd ${SYSPREFIX}
+pkgmk -r .,/ -o -d ..
+cd ..
+pkgtrans -s . "${PKGGETREPO}/${SYSPKGNAME}-${VERSION}.${REVDATE}.${REV}.${ARCH}.pkg" ${SYSPKGNAME}
+gzip "${PKGGETREPO}/${SYSPKGNAME}-${VERSION}.${REVDATE}.${REV}.${ARCH}.pkg"
+echo
+echo "##Your PKG:"
+echo "${PKGGETREPO}/${SYSPKGNAME}-${VERSION}.${REVDATE}.${REV}.${ARCH}.pkg.gz"
+echo
+##cd /var/tmp
+##rm -rf ${PKGSTAGE}
+cd "${PKGGETREPO}"
+./pkg-get-helper "${SYSPKGNAME}-${VERSION}.${REVDATE}.${REV}.${ARCH}.pkg.gz"
+}
+
+pkgcleanup()
+{
+tar czpf "${OSIMAGE}/${__OSNAME}/BUILD/${SYSPKGNAME}-${SYSVERSION}.${ARCH}.tar.gz" "${PKGDEST}"
+test -f "${OSIMAGE}/${__OSNAME}/BUILD/${SYSPKGNAME}-${SYSVERSION}.${ARCH}.tar.gz" && chmod 755 "${OSIMAGE}/${__OSNAME}/BUILD/${SYSPKGNAME}-${SYSVERSION}.${ARCH}.tar.gz"
+rm -rf ${PKGDEST}
+echo "rm -rf ${PKGDEST}"
+
+}
+
+
+
+getpkginfo()
+{
+##REV='5532'
+##CHANGE='pkgbuild/tacacs+-F4.0.4.19.pap.pam.patch'
+VERSION=`echo "${PKG}"|sed -e "s/\-P/./g"|awk -F\- {'print $NF'}|perl -p -e "s/[A-Z,a-z,\+,\-,\_]//g"|perl -p -e "s/\.\.//g"|perl -p -e "s/\.$//g"`
+UNCLEANVER=`echo "${PKG}"|awk -F\- {'print $NF'}`
+if [ -f "${SYSPREFIX}/pkginfo" ] ; then
+  OVERRIDESHORTNAME=`$__GREP -E "(^NAME=..|^PKG=..)" ${SYSPREFIX}/pkginfo|awk -F\= {'print $2'}|perl -p -e "s/^SYS//g"`
+  OVERRIDEBASE=`$__GREP  "^BASEDIR=/." ${SYSPREFIX}/pkginfo|awk -F\= {'print $2'}`
+fi
+if [ "X${OVERRIDESHORTNAME}" != "X" ] ; then
+  SHORTNAME=`echo "${OVERRIDESHORTNAME}"|sort -u|grep '.'|head -1`
+  ORIGSHORTNAME=`echo "${PKG}"|perl -p -e "s/\-${UNCLEANVER}.*//g"|perl -p -e "s/[\.,\+].*//g"|perl -p -e "s/[0-9]\..*//g"|perl -p -e "s/\-\-/\-/g"|perl -p -e "s/\_\_/\_/g"|perl -p -e "s/\-[0-9]$//g"|perl -p -e "s/\_[0-9]$//g"` 
+else
+  SHORTNAME=`echo "${PKG}"|perl -p -e "s/\-${UNCLEANVER}.*//g"|perl -p -e "s/[\.,\+].*//g"|perl -p -e "s/[0-9]\..*//g"|perl -p -e "s/\-\-/\-/g"|perl -p -e "s/\_\_/\_/g"|perl -p -e "s/\-[0-9]$//g"|perl -p -e "s/\_[0-9]$//g"`
+  ORIGSHORTNAME="${SHORTNAME}"
+fi
+
+SYSPKGNAME=`echo "SYS${SHORTNAME}"`
+ARCH="${__ARCH}"
+CATEGORY="application"
+BASEDIR='/'
+test "X${OVERRIDEBASE}" != "X" && BASEDIR="${OVERRIDEBASE}"
+REVDATE=`date +%Y.%m.%d`
+TIMEINSECS="${__TIMEINSECS}"
+SYSVERSION=`echo "${VERSION},REV=${REVDATE}.${REV}"`
+test "X${REV}" = "X" && REV="${TIMEINSECS}" && SYSVERSION=`echo "${VERSION},REV=${REVDATE}.${REV}"`
+CHANGEROOT=`echo "${CHANGEPATHS}"|cut -f1-2 -d/|grep '^pkgbuild/.*'|head -1`
+SVNINFO=`echo "${CHANGEROOT}@${REV}"`
+test "X${CHANGEROOT}" = "X" && SVNINFO="none"
+HOTLINE='https://foo.foo.foo.foo/redmine/projects/seo-ops/issues'
+EMAIL="${__SUDO_USER_MAIL}"
+SUNW_PKG_THISZONE='true'
+if [ -f "${PKGBUILDROOT}/SYSBUILD/DESC" ] ; then
+ DESC=`cat "${PKGBUILDROOT}/SYSBUILD/DESC"`
+fi
+
+if [ -f "${PKGBUILDROOT}/SYSBUILD/${__OSNAME}/DESC" ] ; then
+ DESC=`cat "${PKGBUILDROOT}/SYSBUILD/${__OSNAME}/DESC"`
+fi
+
+if [ -f "${PKGBUILDROOT}/SYSBUILD/${__OSNAME}/${__ARCH}/DESC" ] ; then
+ DESC=`cat "${PKGBUILDROOT}/SYSBUILD/${__OSNAME}/${__ARCH}/DESC"`
+fi
+
+if [ -f "${SYSPREFIX}/pkginfo" ] ; then
+ if grep "^DESC=" "${SYSPREFIX}/pkginfo" >/dev/null ; then
+  DESC=`grep "^DESC=" "${SYSPREFIX}/pkginfo"|perl -p -e "s/^DESC\=//g"`
+ fi
+fi
+
+STAGE="${SHORTNAME}-${VERSION}"
+mv "${PKGSTAGE}" "${PKGDEST}/${STAGE}"
+
+PKGSTAGE="${PKGDEST}/${STAGE}"
+PKGBUILDROOT="${PKGSTAGE}"
+SYSPREFIX="${PKGBUILDROOT}/SYSBUILD/${__OSNAME}/${__ARCH}/${__RELEASE}/${BUILDli}"
+test "X${TYPE}" = "Xdir" && SYSPREFIX="${PKGBUILDROOT}"
+
+
+}
+
+
+mkspec()
+{
+mkdir -p ${PKGDEST}/BUILD || return 12
+mkdir -p ${PKGDEST}/BUILDROOT || return 12
+mkdir -p ${PKGDEST}/RPMS/noarch || return 12
+mkdir -p ${PKGDEST}/SOURCES || return 12
+mkdir -p ${PKGDEST}/SPECS || return 12
+mkdir -p ${PKGDEST}/RPM_TMP || return 12
+cd ${PKGSTAGE} || return 13
+
+OVERIDESPECS=`ls -d *.spec 2>/dev/null`
+test "X${OVERIDESPECS}" != "X" && {
+  OVERIDES=`cat ${OVERIDESPECS}`
+  mv ${OVERIDESPECS} "${PKGDEST}/SPECS"
+  RELEASE=`echo "${OVERIDES}"|grep "^Release:"|awk -F\: {'print $2'}|awk {'print $1'}|sort -u|head -1`
+  OVERIDEVERSION=`echo "${OVERIDES}"|grep "^Version:"|awk -F\: {'print $2'}|awk {'print $1'}|sort -u|head -1`
+  test "X${DESC}" = "X" && DESC=`echo "${OVERIDES}"|grep "^Summary:"|awk -F\: {'print $2'}|awk {'print $1'}|sort -u|head -1`
+  }
+
+ln -s /usr/lib/rpm  /usr/lib/rpm/redhat
+
+PROBLEMFILES=`find . -type f -exec file {} \;|grep -i ":*sparc*"`
+JARS=`find . -type f -name *.jar`
+
+FILELIST=`find * \! -type d -exec file -i {} \;`
+####echo "${FILELIST}" > /tmp/FILELIST
+####exit 56
+EDITABLE=`echo "${FILELIST}"|grep -E "(^.*: text\/|^.*: message\/|^.*: application\/x-shellscript|^.*: application\/x-perl|^.*: application\/x-awk)"|sed -e "s/:[^:]*$//g"|xargs stat --printf="%%config(noreplace) %%attr(%a, %U, %G) /%n\n" `
+
+BINARYS=`echo "${FILELIST}"|grep -v -E "(^.*: text\/|^.*: message\/|^.*: application\/x-shellscript|^.*: application\/x-perl|^.*: application\/x-awk)"|sed -e "s/:[^:]*$//g"|xargs stat --printf="%%attr(%a, %U, %G) /%n\n" `
+
+
+#### -exec stat --printf="%%attr(%a, %U, %G) /%n\n" {} \;`
+
+
+DIRLIST=`find *  -type d -exec stat --printf="%%attr(%a, %U, %G) %%dir /%n/\n" {} \;`
+SAFEDIRS=`echo "${DIRLIST}"|awk ' {if ($5 != "/opt/" && $5 != "/opt" && $5 != "opt" && $5 != "/cust/" && $5 != "/cust" && $5 != "cust" && $5 !~ "^/bin/*/" && $5 !~ "^/boot/*/" && $5 !~ "^/dev/*/" && $5 !~ "^/etc/*/" && $5 !~ "^/home/*/" && $5 !~ "^/lib/*/" && $5 !~ "^/proc/*/" && $5 !~ "^/root/*/" && $5 !~ "^/sbin/*/" && $5 !~ "^/selinux/*/" && $5 !~ "^/srv/*/" && $5 !~ "^/sys/*/" && $5 !~ "^/var/*/" && $5 !~ "^/tmp/*/" && $5 !~ "^/usr/*/" ) {print $1" "$2" "$3" "$4" "$5}}'`
+
+SAFEDIRS=`echo "${SAFEDIRS}"|awk ' {if ($5 != "/opt/" && $5 != "/opt" && $5 != "opt" && $5 != "/cust/" && $5 != "/cust" && $5 != "cust" && $5 !~ "^/usr/local/bin/*/" && $5 !~ "^/boot/*/" && $5 !~ "^/dev/*/" && $5 !~ "^/usr/local/etc/*/" && $5 !~ "^/home/*/" && $5 !~ "^/usr/local/lib/*/" && $5 !~ "^/proc/*/" && $5 !~ "^/root/*/" && $5 !~ "^/usr/local/sbin/*/" && $5 !~ "^/selinux/*/" && $5 !~ "^/srv/*/" && $5 !~ "^/sys/*/" && $5 !~ "^/usr/local/var/*/" && $5 !~ "^/tmp/*/" && $5 !~ "^/usr/*/" && $5 !~ "^/usr/local/*/"  ) {print $1" "$2" "$3" "$4" "$5}}'`
+
+ARCH='noarch'
+RPMGROUP='Applications/Engineering'
+test "X${RELEASE}" = "X" && RELEASE=`__getrev`
+test "X${OVERIDEVERSION}" != "X" && VERSION="${OVERIDEVERSION}"
+##exit
+test "X${RELEASE}" = "X" && exit
+test "X${DESC}" = "X" && DESC="${SHORTNAME}"
+
+CLEANSPEC="${EDITABLE} 
+${BINARYS}
+${SAFEDIRS}"
+
+CLEANSPEC=`echo "${CLEANSPEC}"|sort -u|grep -v "/.svn"|grep '.'|perl -p -e "s|( /usr/info.*$)|\1.gz|g"|perl -p -e "s|( /usr/kerberos/man.*$)|\1.gz|g"|perl -p -e "s|( /usr/lib/.*/man/man.*$)|\1.gz|g"|perl -p -e "s|( /usr/lib/perl5/man/man.*$)|\1.gz|g"|perl -p -e "s|( /usr/man/.*/man.*$)|\1.gz|g"|perl -p -e "s|( /usr/man/man.*$)|\1.gz|g"|perl -p -e "s|( /usr/share/doc/.*/man/man.*$)|\1.gz|g"|perl -p -e "s|( /usr/share/info.*$)|\1.gz|g"|perl -p -e "s|( /usr/share/man/.*/man.*$)|\1.gz|g"|perl -p -e "s|( /usr/share/man/man.*$)|\1.gz|g"|perl -p -e "s|( /usr/X11R6/man/man.*$)|\1.gz|g"`
+
+
+####grep -G "${filter}" SPECS/SYSversion-0.9908-2014.06.17.42381.spec |perl -p -e  "s|$|.gz|g"
+
+RPMMACROS="%prep
+%define  _topdir                ${PKGDEST}
+%define  _tmppath               ${PKGDEST}/RPM_TMP
+%define _unpackaged_files_terminate_build 0
+%define _binaries_in_noarch_packages_terminate_build 0
+%build
+%install
+%clean
+%files
+%defattr (755,root,bin)
+${CLEANSPEC}
+%pre
+%post
+%preun
+%postun
+%description
+"
+
+SYSVERSION="${VERSION}-${RELEASE}"
+ 
+printf "Name:           ${SYSPKGNAME}\nVersion:        ${VERSION}\nRelease:        ${RELEASE}\nSummary:        ${DESC}\nLicense:        NA\nGroup:          ${RPMGROUP}\nPackager:       ${EMAIL}\nURL:            http://${__SHORTSUPPORT}/SYScontrib/Linux/BUILD/${SYSPKGNAME}-${SYSVERSION}.${ARCH}.tar.gz\nBuildroot:      ${PKGSTAGE}\nBuildArch:      ${ARCH}\n" > ${PKGDEST}/SPECS/${SYSPKGNAME}-${VERSION}-${RELEASE}.spec
+
+test "X${PROBLEMFILES}" != "X" && echo "Autoreq: 0" >> ${PKGDEST}/SPECS/${SYSPKGNAME}-${VERSION}-${RELEASE}.spec
+test "X${JARS}" != "X" -a "X${PROBLEMFILES}" = "X" && echo "Autoreq: 0" >> ${PKGDEST}/SPECS/${SYSPKGNAME}-${VERSION}-${RELEASE}.spec
+
+test "X${JARS}" != "X" && echo '%define __os_install_post       \
+        /usr/lib/rpm/redhat/brp-compress \
+        %{!?__debug_package:/usr/lib/rpm/redhat/brp-strip %{__strip}} \
+        /usr/lib/rpm/redhat/brp-strip-static-archive %{__strip} \
+        /usr/lib/rpm/redhat/brp-strip-comment-note %{__strip} %{__objdump} \
+%{nil}
+%{nil}' >> ${PKGDEST}/SPECS/${SYSPKGNAME}-${VERSION}-${RELEASE}.spec
+
+
+
+
+
+
+echo "${RPMMACROS}" >> ${PKGDEST}/SPECS/${SYSPKGNAME}-${VERSION}-${RELEASE}.spec
+
+
+
+##exit
+}
+
+mkautorev()
+{
+DIR=$1
+test "X${1}" = "X" && return
+cat >${DIR}/BUILD.sh <<"__EOF__"
+#!/bin/bash
+
+. /etc/default/SYSconstants
+
+MYDIR=`dirname $0`
+RELEASE=`__getrev`
+EMAIL="${__SUDO_USER_MAIL}"
+
+if [ "X${MYDIR}" != "X" -a "X${RELEASE}" != "X" -a "X${EMAIL}" != "X" ] ; then
+  if [ -f ${MYDIR}/SPECS/*.spec ] ; then
+    for i in ${MYDIR}/SPECS/*.spec ; do
+      perl -p -i -e "s|^Release: .*|Release:        ${RELEASE}|" ${i} 
+      perl -p -i -e "s|^Packager: .*|Packager:        ${EMAIL}|" ${i}
+      perl -p -i -e "s|^URL: .*|URL:        NA|" ${i}
+      rpmbuild -bb ${i}
+    done
+  fi
+fi
+
+__EOF__
+
+chmod 755 "${DIR}/BUILD.sh"
+}
+
+mkrpm()
+{
+rpmbuild --buildroot="${PKGBUILDROOT}" -bb ${PKGDEST}/SPECS/${SYSPKGNAME}-${VERSION}-${RELEASE}.spec
+MYRPM="${SYSPKGNAME}-${VERSION}-${RELEASE}.${ARCH}.rpm"
+MYRPMPATH="${PKGDEST}/RPMS/${ARCH}/${MYRPM}"
+SYSYUM='/unix_ops/SYScontrib/Linux/repos/pkgbuild'
+set -x
+if [ -s "${MYRPMPATH}" ] ; then
+  cp "${MYRPMPATH}" "${SYSYUM}"
+  cd  "${SYSYUM}"
+##  chmod 755 "${MYRPM}"
+  "${SYSYUM}/../../updaterepo.sh" "--update"
+  chmod -R 755 ${SYSYUM}
+fi
+
+##mkautorev "${PKGDEST}"
+
+}
+mkrpmdeps()
+{
+echo "place holder function mkrpmdeps for future feature"
+return 0
+}
+
+CWD=`pwd`
+main `echo "$@"|sed -e "s%^\./%${CWD}/%"`

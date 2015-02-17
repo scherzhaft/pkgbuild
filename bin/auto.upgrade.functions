@@ -1,0 +1,294 @@
+#!/bin/bash
+
+
+MIRRORS()
+{
+PHPMIRROR='http://www.php.net/distributions'
+PHPMIRROROUT=`wget ${PHPMIRROR} -O - `
+APACHEMIRROR='http://mirror.candidhosting.com/pub/apache/httpd'
+APACHEMIRROROUT=`wget ${APACHEMIRROR} -O - `
+WIRESHARKMIRROR='http://www.wireshark.org/download/src'
+WIRESHARKMIRROROUT=`wget ${WIRESHARKMIRROR} -O - `
+MIRRORLIST="PHPMIRROROUT APACHEMIRROROUT WIRESHARKMIRROROUT"
+}
+
+urlfilter()
+{
+for i in $MIRRORLIST ; do
+
+  eval echo \"\$${i}\" | $__GREP -E "(.tar.gz|.tar.bz2)"|perl -p -e "s|\.tar\.gz.*|\.tar\.gz|g"|perl -p -e "s|\.tar\.bz2.*|\.tar\.bz2|g"|grep "<a href="|perl -p -e "s/^.*<a href=\"//g"|sort -u
+
+done
+
+}
+
+printavailsrcs()
+{
+MIRRORS
+echo "##AVAILABLE SOURCES"
+echo
+eval urlfilter "${MIRRORLIST}"|awk -F\/ {'print $NF'}
+
+}
+
+
+whichmirror()
+{
+
+for i in $MIRRORLIST ; do
+   eval echo \"\$${i}\" | grep $1 && DLMIRROR=`echo "${i}"|perl -p -e "s/OUT$//g"` && return 0
+done
+return 1
+}
+
+downloadsrc()
+{
+echo ENTER DOWNLOAD
+
+cd "${SRCARCHIVE}"
+test -f "${SRCFILE}" -o -d "${PKGBUILD}/${SRCFILE}" || wget $1
+test "X$?" = "X0" || return $?
+FTYPE=`file "${SRCFILE}"|awk -F\: {'print $2'}`
+case "${FTYPE}" in
+  *gzip*)
+    SRCDIR=`tar -ztvf ${SRCFILE} |awk {'print $NF'}|awk -F\/ {'print $1'}|sort -u|grep '.'|head -1` || return $?
+    test -d "${PKGBUILD}/${SRCDIR}" || tar -zxvf ${SRCFILE} -C "${PKGBUILD}" || return $?
+
+  ;;
+  *bzip*)
+    SRCDIR=`tar -jtvf ${SRCFILE} |awk {'print $NF'}|awk -F\/ {'print $1'}|sort -u|grep '.'|head -1` || return $?
+    test -d "${PKGBUILD}/${SRCDIR}" || tar -jxvf ${SRCFILE} -C "${PKGBUILD}" || return $? 
+     
+  ;;
+
+  *)
+    SRCDIR=`basename ${SRCFILE}` || return $?
+    test -d "${PKGBUILD}/${SRCDIR}" || return $?
+##    return 666
+esac
+
+echo LEAVING DOWNLOAD
+return 0
+}
+
+
+preparesrc()
+{
+set -x
+cd "${PKGBUILD}" || return $?
+sudo chmod 2770 .;sudo chown svn:svn .
+##pwn "${SRCDIR}"
+mkdir -p ${SRCDIR}/SYSBUILD/$__OSNAME/$__ARCH/$__RELEASE/BUILDROOT || return $?
+mkdir -p ${SRCDIR}/SYSBUILD/$__OSNAME/$__ARCH/$__RELEASE/CONFIGURE || return $?
+sudo rm -rf /var/tmp/pkg$$
+mkdir -p /var/tmp/pkg$$ || return $?
+cd /var/tmp/pkg$$
+sudo pkg-get -U
+SRCREV=`echo "${SRCDIR}"|awk -F\- {'print $NF'}` || return $?
+SRCNAME=`echo "${SRCDIR}"|perl -p -e "s/\-${SRCREV}$//g"|perl -p -e "s/[\.,\+].*//g"|perl -p -e "s/[0-9]\..*//g"|perl -p -e "s/\-\-/\-/g"|perl -p -e "s/\_\_/\_/g"|perl -p -e "s/\-[0-9]$//g"|perl -p -e "s/\_[0-9]$//g"` || return $?
+PKGREVSTABLE=`sudo pkg-get -U >/dev/null 2>&1;pkg-get -a|grep "SYS${SRCNAME} "` || PKGREVUNSTABLE=`sudo pkg-get -s http://$__SHORTSUPPORT/osImage/SunOS/PKGS/unstable -U >/dev/null 2>&1;pkg-get -s http://$__SHORTSUPPORT/osImage/SunOS/PKGS/unstable -a|grep "SYS${SRCNAME} "`
+
+test "X${PKGREVUNSTABLE}" != "X" && PKGREV=`echo "${PKGREVUNSTABLE}" |sort -u|tail -1|awk {'print $NF'}` && DLSTRING="-s http://$__SHORTSUPPORT/osImage/SunOS/PKGS/unstable"
+
+test "X${PKGREV}" = "X" && PKGREV=`echo "${PKGREVSTABLE}" |sort -u|tail -1|awk {'print $NF'}` && DLSTRING=""
+
+test "X${PKGREV}" != "X" || return $?
+
+pkg-get ${DLSTRING} -d "SYS${SRCNAME}@${PKGREV}" || return $?
+##exit 0
+CURRPKG=`ls`
+test "X${CURRPKG}" != "X" || return $?
+set -x
+PKGTYPE=`file ${CURRPKG}|cut -f2- -d:`
+case "${PKGTYPE}" in
+  *gzip*)
+    gunzip "${CURRPKG}"
+    CURRPKG=`ls`
+  ;;
+  *)
+    return 109
+esac
+pkgtrans -i "${CURRPKG}" . all || return $?
+SVNINFO=`find . -name pkginfo -exec grep  "^SVNINFO=" {} \;|perl -p -e "s/^SVNINFO\=//g"` || return $?
+test "X${SVNINFO}" != "X" || return $?
+SVNBRANCH=`echo "${SVNINFO}"|perl -p -e "s/\@.*//g"`
+test "X${SVNBRANCH}" != "X" || return $?
+svn checkout file:///odirtools/svn/svnroot/${SVNBRANCH}/SYSBUILD || return $?
+chmod -R 755 ./SYSBUILD
+cd ./SYSBUILD || return $?
+find . -name DESC -depth -print|cpio -pdmu "${PKGBUILD}/${SRCDIR}/SYSBUILD"
+SPECIALFILES=`find . -type f \( -name pkginfo -o -name depend -o -name preinstall -o -name postinstall -o -name preuninstall -o -name postremove -o -name copyright \) |cut -d/ -f 1-6|$__GREP -E "(\/pkginfo$|\/depend$|\/preinstall$|\/postinstall$|\/preuninstall$|\/postremove$|\/copyright$)"`
+echo "${SPECIALFILES}"|cpio -pdmu "${PKGBUILD}/${SRCDIR}/SYSBUILD"
+PWD=`pwd`
+
+for i in `echo "${SPECIALFILES}"` ; do
+  src="$i"
+  destroot="$__OSNAME/$__ARCH/$__RELEASE"
+  destbroot=`echo "${src}"|cut -d/ -f 5- `
+  if [ -f ${PKGBUILD}/${SRCDIR}/SYSBUILD/${destroot}/${destbroot} ] ; then
+    echo foo
+  else
+    cp ${src} ${PKGBUILD}/${SRCDIR}/SYSBUILD/${destroot}/${destbroot}
+  fi
+done
+
+CONFIGDIRS=`find "${PWD}" \( -name CONFIGURE -o -name CONFIGURE.* \) -exec find {} \( -name config.nice -o -name config.log \) \;|cut -d/ -f 1-10|grep -E "(\/config.nice$|\/config.log$)"|cut -d/ -f 1-9|sort -u`
+
+echo "${CONFIGDIRS}"|grep "${__ARCH}" && CONFIGDIRS=`echo "${CONFIGDIRS}"|grep "${__ARCH}"`
+
+cd "${PKGBUILD}" || return $?
+for i in `echo "${CONFIGDIRS}"` ; do
+  NEWCONFDIR=`basename "${i}"`
+  test "X${NEWCONFDIR}" = "X" && return 1
+  NEWBUILDDIR=`echo "${NEWCONFDIR}"|perl -p -e "s/CONFIGURE/BUILDROOT/g"`
+  test "X${NEWBUILDDIR}" = "X" && return 2
+  mkdir -p "${SRCDIR}/SYSBUILD/$__OSNAME/$__ARCH/$__RELEASE/${NEWCONFDIR}"
+  mkdir -p "${SRCDIR}/SYSBUILD/$__OSNAME/$__ARCH/$__RELEASE/${NEWBUILDDIR}"
+done
+
+##pwn "${SRCDIR}"
+##pwn "${SRCDIR}"
+sudo chown -R svn:svn /odirtools/svn
+sudo chmod -R 770 /odirtools/svn
+##svn commit -m "initial source code import, ${SRCDIR}" "${SRCDIR}" || return $?
+
+return 0
+
+}
+
+buildsrc()
+{
+
+for i in `echo "${CONFIGDIRS}"` ; do
+  unset BUILDNICE
+  unset BUILDFROMLOG
+  test -f "${i}/config.nice" && { buildnice $i ; BUILDNICE=$?; } 
+##  return 200
+##/bin/bash -i
+  test -f "${i}/config.log"  && test "X${BUILDNICE}" != "X0" && { buildfromlog $i ; BUILDFROMLOG=$?; }
+  test "X${BUILDNICE}" != "X0" && test "X${BUILDFROMLOG}" != "X0" && return 1
+done
+return 0
+
+}
+
+buildnice()
+{
+unset RUNFROM
+unset MAKE
+unset MAKEINSTALL
+unset SUDOMAKEINSTALL
+test "X${SRCDIR}" != "X" && rm -rf /var/tmp/pkg$$/${SRCDIR}
+
+CONFIGDIR="${1}"
+NICEFILE="${CONFIGDIR}/config.nice"
+test -f "${NICEFILE}" || return $?
+NEWCONFDIR=`basename "${CONFIGDIR}"`
+test "X${NEWCONFDIR}" = "X" && return 1
+NEWCONFDIR="${PKGBUILD}/${SRCDIR}/SYSBUILD/$__OSNAME/$__ARCH/$__RELEASE/${NEWCONFDIR}"
+NEWBUILDDIR=`echo "${NEWCONFDIR}"|perl -p -e "s/CONFIGURE/BUILDROOT/g"`
+test "X${NEWBUILDDIR}" = "X" && return 2
+export DESTDIR="${NEWBUILDDIR}"
+export NEWCONFDIR
+grep "\.\./\.\./\.\./\.\./\.\./.*configure" "${NICEFILE}" && RUNFROM="${NEWCONFDIR}"
+test "X${RUNFROM}" = "X" && cd /var/tmp/pkg$$ && svn checkout file:///odirtools/svn/svnroot/pkgbuild/${SRCDIR} && RUNFROM="/var/tmp/pkg$$/${SRCDIR}" && chmod -R 755 "${RUNFROM}"
+cd "${RUNFROM}"
+
+
+sudo touch /var/tmp/pkg$$/timestamp || return $?
+${NICEFILE} || return $?
+make ; MAKE="$?" && test "X${MAKE}" = "X" && MAKE="0"
+test "X${MAKE}" != "X0" && make clean 
+
+test "X${MAKE}" != "X0" && return "${MAKE}"
+
+grep DESTDIR `find . -type f -exec /opt/sfw/bin/gfile -i {} \;|grep -E "(^\./.*: text\/|^\./.*: message\/|^\./.*: application\/x-shellscript|^\./.*: application\/x-perl|^\./.*: application\/x-awk)"|awk -F\: {'print $1'}` && make install DESTDIR="${DESTDIR}" ; MAKEINSTALL="$?" && test "X${MAKEINSTALL}" = "X" -o "X${MAKEINSTALL}" = "X0" && MAKEINSTALL="0" && make clean
+
+echo "${RUNFROM}"|grep "^/var/tmp/pkg$$/${SRCDIR}" && { svn st|awk {'print $2'}|cpio -pdmu "${NEWCONFDIR}" ; return "${MAKEINSTALL}" ; }
+
+test "X${MAKEINSTALL}" = "X0" && return "${MAKEINSTALL}"
+
+test "X${MAKEINSTALL}" != "X0" && { sudo make install ; SUDOMAKEINSTALL="$?" && test "X${SUDOMAKEINSTALL}" = "X" && SUDOMAKEINSTALL="0" ; }
+test "X${SUDOMAKEINSTALL}" = "X0" && { sudo find /usr /sbin /opt  -newer /var/tmp/pkg$$/timestamp -depth -print|sudo cpio -pdmu "${DESTDIR}" || SUDOMAKEINSTALL="11" ; }
+test "X${SUDOMAKEINSTALL}" != "X0" && { make clean ;return "${SUDOMAKEINSTALL}" ; }
+
+make clean
+test "X${SUDOMAKEINSTALL}" = "X0" && echo "${RUNFROM}"|grep "^/var/tmp/pkg$$/${SRCDIR}" && { svn st|awk {'print $2'}|cpio -pdmu "${NEWCONFDIR}" ; }
+return "${SUDOMAKEINSTALL}"
+
+}
+
+buildfromlog()
+{
+unset RUNFROM
+unset MAKE
+unset MAKEINSTALL
+unset SUDOMAKEINSTALL
+test "X${SRCDIR}" != "X" && rm -rf /var/tmp/pkg$$/${SRCDIR}
+
+CONFIGDIR="${1}"
+LOGFILE="${CONFIGDIR}/config.log"
+test -f "${LOGFILE}" || return $?
+NEWCONFDIR=`basename "${CONFIGDIR}"`
+test "X${NEWCONFDIR}" = "X" && return 1
+NEWCONFDIR="${PKGBUILD}/${SRCDIR}/SYSBUILD/$__OSNAME/$__ARCH/$__RELEASE/${NEWCONFDIR}"
+NEWBUILDDIR=`echo "${NEWCONFDIR}"|perl -p -e "s/CONFIGURE/BUILDROOT/g"`
+test "X${NEWBUILDDIR}" = "X" && return 2
+export DESTDIR="${NEWBUILDDIR}"
+export NEWCONFDIR
+CONFIGLINE=`head ${LOGFILE}|grep "\$ .*/configure " | head -1|tr -d '$'|perl -p -e "s/ *//"`
+echo "${CONFIGLINE}"|grep "\.\./\.\./\.\./\.\./\.\./.*configure" && RUNFROM="${NEWCONFDIR}"
+test "X${RUNFROM}" = "X" && cd /var/tmp/pkg$$ && svn checkout file:///odirtools/svn/svnroot/pkgbuild/${SRCDIR} && RUNFROM="/var/tmp/pkg$$/${SRCDIR}" && chmod -R 755 "${RUNFROM}"
+cd "${RUNFROM}"
+
+
+sudo touch /var/tmp/pkg$$/timestamp || return $?
+eval "${CONFIGLINE}" || return $?
+make ; MAKE="$?" && test "X${MAKE}" = "X" && MAKE="0"
+test "X${MAKE}" != "X0" && make clean
+
+test "X${MAKE}" != "X0" && return "${MAKE}"
+
+grep DESTDIR `find . -type f -exec /opt/sfw/bin/gfile -i {} \;|grep -E "(^\./.*: text\/|^\./.*: message\/|^\./.*: application\/x-shellscript|^\./.*: application\/x-perl|^\./.*: application\/x-awk)"|awk -F\: {'print $1'}` && make install DESTDIR="${DESTDIR}" ; MAKEINSTALL="$?" && test "X${MAKEINSTALL}" = "X" -o "X${MAKEINSTALL}" = "X0" && MAKEINSTALL="0" && make clean
+
+test "X${MAKEINSTALL}" = "X0" && echo "${RUNFROM}"|grep "^/var/tmp/pkg$$/${SRCDIR}" && { svn st|awk {'print $2'}|cpio -pdmu "${NEWCONFDIR}" ; return "${MAKEINSTALL}" ; }
+
+test "X${MAKEINSTALL}" = "X0" && return "${MAKEINSTALL}"
+
+test "X${MAKEINSTALL}" != "X0" && sudo make install ; SUDOMAKEINSTALL="$?" && test "X${SUDOMAKEINSTALL}" = "X" -o "X${SUDOMAKEINSTALL}" = "X0" && SUDOMAKEINSTALL="0" && sudo find /usr /sbin /opt  -newer /var/tmp/pkg$$/timestamp -depth -print|sudo cpio -pdmu "${DESTDIR}" || SUDOMAKEINSTALL="11"
+test "X${SUDOMAKEINSTALL}" != "X0" && { make clean; return "${SUDOMAKEINSTALL}" ; }
+
+make clean
+test "X${SUDOMAKEINSTALL}" = "X0" && echo "${RUNFROM}"|grep "^/var/tmp/pkg$$/${SRCDIR}" && { svn st|awk {'print $2'}|cpio -pdmu "${NEWCONFDIR}" ; }
+
+return "${SUDOMAKEINSTALL}"
+
+
+}
+
+main()
+{
+. /sysbuild/pkgbuild/SYSENV
+
+PKGBUILD="/sysbuild/pkgbuild"
+SRCARCHIVE="${PKGBUILD}/srcarchive"
+SRCFILE="$1"
+
+if [ "X$@" != "X" ] ; then
+  if [ -d "${PKGBUILD}/${SRCFILE}" ] ; then
+    downloadsrc $1
+    preparesrc || return $?
+    buildsrc || return $?
+    return 0
+  else
+    MIRRORS >/dev/null 2>&1
+    whichmirror $1 || return $?
+    eval downloadsrc \"\$${DLMIRROR}\/$1\" || return $?
+    preparesrc || return $?
+    buildsrc || return $?
+    return 0
+  fi 
+else
+  printavailsrcs
+fi
+}

@@ -1,0 +1,28 @@
+#!/bin/sh
+
+ARGS=$@
+me=`basename $0`
+
+case "${ARGS}"  in
+  "")
+    echo  "usage: $me [DIR,.,./]"
+    exit 1
+  ;; 
+
+  .)
+    sudo chown -R svn:svn * .??*;sudo chmod -R 2770 * .??*;foo=`svn st|awk {'print $2'}`;svn add $foo
+    sudo chown -R svn:svn * .??*;sudo chmod -R 2770 * .??*;foo=`find .|grep -v '/.svn'`;svn add $foo
+  ;;
+
+  ./*|/*)
+    sudo chown -R svn:svn "${ARGS}";sudo chmod -R 2770 "${ARGS}";foo=`svn st "${ARGS}"|awk {'print $2'}`;svn add $foo
+    sudo chown -R svn:svn "${ARGS}";sudo chmod -R 2770 "${ARGS}";foo=`find "${ARGS}"|grep -v '/.svn'`;svn add $foo
+  ;;
+
+  *)
+    sudo chown -R svn:svn "./${ARGS}";sudo chmod -R 2770 "./${ARGS}";foo=`svn st "./${ARGS}"|awk {'print $2'}`;svn add $foo
+    sudo chown -R svn:svn "./${ARGS}";sudo chmod -R 2770 "./${ARGS}";foo=`find "./${ARGS}"|grep -v '/.svn'`;svn add $foo
+esac
+
+ 
+  

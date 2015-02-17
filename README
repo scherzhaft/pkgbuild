@@ -1,0 +1,1 @@
+pkgbuild  - one of the main branches of file:///odirtools/svn/svnroot/.  It is intended to be the central repo where all software/pkg builds take place.  Under svn control, its aim is to track a given softwares source code state, and any 'makes' from that source code.
